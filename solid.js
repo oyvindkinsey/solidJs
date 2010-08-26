@@ -261,9 +261,8 @@
                 clearTimeout(timeout);
                 var response, errorMsg, headers = {};
                 if ("getAllResponseHeaders" in req) {
-                    var names = req.getAllRequestHeaders().match(/^.*?:/gm);
-                    if (names) {
-                        var name, i = names.length;
+                    var names = req.getAllRequestHeaders().match(/^.*?:/gm), i = names ? names.length : 0;
+                    if (i) {
                         while (i--) {
                             name = names[i].substring(0, names[i].length - 1);
                             headers[name] = req.getResponseHeader(name);
