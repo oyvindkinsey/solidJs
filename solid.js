@@ -161,6 +161,33 @@
         return null;
     }
     
+    function apply(destination, source){
+        for (var prop in source) {
+            if (source.hasOwnProperty(prop)) {
+                destination[prop] = source[prop];
+            }
+        }
+        return destination;
+    }
+    
+    function applyIf(destination, source){
+        var member;
+        for (var prop in source) {
+            if (source.hasOwnProperty(prop)) {
+                if (prop in destination) {
+                    member = source[prop];
+                    if (getType(member) === "object") {
+                        applyIf(destination[prop], member);
+                    }
+                }
+                else {
+                    destination[prop] = source[prop];
+                }
+            }
+        }
+        return destination;
+    }
+    
     /**
      * Creates a cross-browser XMLHttpRequest object
      * @private
@@ -191,34 +218,13 @@
         }
     }());
     
-    function apply(destination, source){
-        for (var prop in source) {
-            if (source.hasOwnProperty(prop)) {
-                destination[prop] = source[prop];
-            }
-        }
-        return destination;
-    }
-    
-    function applyIf(destination, source){
-        var member;
-        for (var prop in source) {
-            if (source.hasOwnProperty(prop)) {
-                if (prop in destination) {
-                    member = source[prop];
-                    if (getType(member) === "object") {
-                        applyIf(destination[prop], member);
-                    }
-                }
-                else {
-                    destination[prop] = source[prop];
-                }
-            }
-        }
-        return destination;
-    }
-    
+    /** 
+     * Runs an asynchronous request using XMLHttpRequest
+     * @param {object} config The configuration
+     */
     function ajax(config){
+        var req = getXhr(), pairs = [], data, isPOST, timeout;
+        
         applyIf(config, {
             method: "POST",
             headers: {
@@ -226,13 +232,24 @@
                 "X-Requested-With": "XMLHttpRequest"
             },
             success: emptyFn,
-            error: emptyFn,
+            error: function(msg){
+                throw new Error(msg);
+            },
             data: {},
-            type: "plain"
-        });
+            type: "plain",
+            timeout: 30
+        }, true);
+        isPOST = config.method == "POST";
         
-        var req = getXhr(), q = [];
-        req.open(config.method, config.url, true);
+        for (var key in config.data) {
+            if (config.data.hasOwnProperty(key)) {
+                pairs.push(encodeURIComponent(key) + "=" + encodeURIComponent(config.data[key]));
+            }
+        }
+        data = pairs.join("&");
+        
+        req.open(config.method, config.url + (isPOST ? "" : "?" + data), true);
+        
         for (var prop in config.headers) {
             if (config.headers.hasOwnProperty(prop)) {
                 req.setRequestHeader(prop, config.headers[prop]);
@@ -241,27 +258,70 @@
         
         req.onreadystatechange = function(){
             if (req.readyState == 4) {
-                if (req.status >= 200 && req.status < 300) {
-                    var response = req.responseText;
-                    if (config.type === "json") {
-                        response = getJSON().parse(response);
+                clearTimeout(timeout);
+                var response, errorMsg, headers = {};
+                if ("getAllResponseHeaders" in req) {
+                    var names = req.getAllRequestHeaders().match(/^.*?:/gm);
+                    if (names) {
+                        var name, i = names.length;
+                        while (i--) {
+                            name = names[i].substring(0, names[i].length - 1);
+                            headers[name] = req.getResponseHeader(name);
+                        }
                     }
-                    config.success(response);
+                }
+                if (config.type == "json") {
+                    try {
+                        response = req.responseText;
+                        response = getJSON().parse(response);
+                    } 
+                    catch (e) {
+                        errorMsg = "An error occured while parsing the JSON: " + e.message;
+                    }
                 }
                 else {
-                    config.error("An error occured. Status code: " + req.status);
+                    response = req.responseText;
                 }
-                req.onreadystatechange = null;
-                delete req.onreadystatechange;
+                
+                if (req.status < 200 || req.status >= 300) {
+                    errorMsg = "The server did not return a valid status code.";
+                }
+                
+                if (errorMsg) {
+                    config.error({
+                        message: errorMsg,
+                        status: req.status,
+                        data: response,
+                        toString: function(){
+                            return this.message + " Status: " + this.status;
+                        },
+                        headers: headers
+                    });
+                }
+                else {
+                    config.success({
+                        data: response,
+                        status: req.status,
+                        headers: headers
+                    });
+                }
+                
+                req.onreadystatechange = emptyFn;
+                req = null;
             }
         };
-        
-        for (var key in config.data) {
-            if (config.data.hasOwnProperty(key)) {
-                q.push(encodeURIComponent(key) + "=" + encodeURIComponent(config.data[key]));
-            }
-        }
-        req.send(q.join("&"));
+        timeout = setTimeout(function(){
+            req.abort();
+            config.error({
+                message: "timeout after " + config.timeout + " second",
+                status: 0,
+                data: null,
+                toString: function(){
+                    return this.message + " Status: " + this.status;
+                }
+            });
+        }, config.timeout);
+        req.send(isPOST ? data : "");
     }
     
     
